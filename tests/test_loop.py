@@ -1,7 +1,7 @@
 import pytest
 
 from agent.core.exceptions import LoopDetectedError, MaxRevisionsExceededError
-from agent.core.loop import AgentLoop, _estimate_cost, _to_tool_sequence
+from agent.core.loop import AgentLoop, _estimate_cost
 from agent.core.types import (
     ExperimentRun,
     GateOutcome,
@@ -41,11 +41,19 @@ def _auto_confirm(plan: Plan, cost: float) -> bool:
 
 
 def _stub_toolbox() -> dict:
+    def _cv(**kw):
+        return {
+            "results": {m: {"mean": 0.85, "std": 0.02, "fold_scores": [0.84, 0.86, 0.85, 0.85, 0.85]}
+                        for m in kw["runs"]},
+            "metric": kw["metric"],
+            "strategy": kw["strategy"],
+            "n_folds": 5,
+        }
     return {
-        "inspect_data":   lambda **kw: {"shape": (1000, 10), "imbalance_ratio": 12.0},
-        "train_model":    lambda **kw: {"model": "fitted", "method": kw["method"]},
-        "cross_validate": lambda **kw: {"mean": 0.85, "std": 0.02},
-        "compare_models": lambda **kw: {"winner": "random_forest", "p_value": 0.03},
+        "inspect_data":      lambda **kw: {"shape": (1000, 10), "imbalance_ratio": 12.0},
+        "train_model":       lambda **kw: {"method": kw["method"], "scores": {"auc_pr": 0.85}},
+        "cross_validate":    _cv,
+        "compare_models":    lambda **kw: {"winner": "random_forest", "p_value": 0.03},
         "feature_importance": lambda **kw: {"top": ["tenure", "charges"]},
     }
 
@@ -84,18 +92,27 @@ def test_approved_plan_executes_all_tools():
 
 def test_tool_sequence_order():
     plan = _plan(methods=("logreg", "random_forest"))
-    seq = _to_tool_sequence(plan)
-    tool_names = [t for t, _ in seq]
-    assert tool_names[0] == "inspect_data"
-    assert "train_model" in tool_names
-    assert "cross_validate" in tool_names
-    assert "compare_models" in tool_names
+    loop = _make_loop(
+        planner=_static_planner(plan),
+        gate=_gate_returning(GateResult(GateOutcome.APPROVED)),
+    )
+    traj = loop.run("compare models on churn")
+    tool_calls = [s.input["tool"] for s in traj if s.type == StepType.TOOL_CALL]
+    assert tool_calls[0] == "inspect_data"
+    assert "train_model" in tool_calls
+    assert "cross_validate" in tool_calls
+    assert "compare_models" in tool_calls
 
 
 def test_single_run_skips_compare_models():
     plan = _plan(methods=("logreg",))
-    seq = _to_tool_sequence(plan)
-    assert all(t != "compare_models" for t, _ in seq)
+    loop = _make_loop(
+        planner=_static_planner(plan),
+        gate=_gate_returning(GateResult(GateOutcome.APPROVED)),
+    )
+    traj = loop.run("single run")
+    tool_calls = [s.input["tool"] for s in traj if s.type == StepType.TOOL_CALL]
+    assert "compare_models" not in tool_calls
 
 
 # --- gate paths --------------------------------------------------------------

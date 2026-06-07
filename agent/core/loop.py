@@ -79,17 +79,35 @@ class AgentLoop:
             return self._execute(plan, trajectory, seen_calls)
 
     def _execute(self, plan: Plan, trajectory: Trajectory, seen_calls: set[str]) -> Trajectory:
-        for tool_name, args in _to_tool_sequence(plan):
-            sig = _call_sig(tool_name, args)
+        def call(tool_name: str, **kwargs) -> dict:
+            sig = _call_sig(tool_name, kwargs)
             if sig in seen_calls:
                 raise LoopDetectedError(f"loop: '{tool_name}' called with identical args twice")
             seen_calls.add(sig)
-
             if tool_name not in self.toolbox:
                 raise KeyError(f"tool '{tool_name}' not registered in toolbox")
+            result = self.toolbox[tool_name](**kwargs)
+            _record(trajectory, StepType.TOOL_CALL, {"tool": tool_name, "args": kwargs}, result)
+            return result
 
-            result = self.toolbox[tool_name](**args)
-            _record(trajectory, StepType.TOOL_CALL, {"tool": tool_name, "args": args}, result)
+        call("inspect_data", dataset=plan.dataset)
+
+        for run in plan.runs:
+            call("train_model", dataset=plan.dataset, method=run.method, hyperparams=run.hyperparams)
+
+        cv_result = call("cross_validate",
+            dataset=plan.dataset,
+            runs=[r.method for r in plan.runs],
+            strategy=plan.cv_strategy,
+            metric=plan.metric,
+        )
+
+        if len(plan.runs) > 1:
+            fold_scores = {m: cv_result["results"][m]["fold_scores"] for m in cv_result["results"]}
+            call("compare_models", fold_scores=fold_scores, metric=plan.metric)
+
+        for run in plan.runs:
+            call("feature_importance", dataset=plan.dataset, method=run.method, hyperparams=run.hyperparams)
 
         _record(trajectory, StepType.RESULT, {}, {"status": "complete"})
         return trajectory
@@ -132,31 +150,6 @@ def _estimate_cost(plan: Plan) -> float:
         return 0.1 * len(plan.runs)
     return 999.0
 
-
-def _to_tool_sequence(plan: Plan) -> list[tuple[str, dict]]:
-    """Translate a Plan into an ordered (tool_name, kwargs) sequence."""
-    seq: list[tuple[str, dict]] = [
-        ("inspect_data", {"dataset": plan.dataset}),
-    ]
-    for run in plan.runs:
-        seq.append(("train_model", {
-            "dataset": plan.dataset,
-            "method": run.method,
-            "hyperparams": run.hyperparams,
-        }))
-    seq.append(("cross_validate", {
-        "dataset": plan.dataset,
-        "runs": [r.method for r in plan.runs],
-        "strategy": plan.cv_strategy,
-        "metric": plan.metric,
-    }))
-    if len(plan.runs) > 1:
-        seq.append(("compare_models", {
-            "dataset": plan.dataset,
-            "runs": [r.method for r in plan.runs],
-            "metric": plan.metric,
-        }))
-    return seq
 
 
 def _cli_confirm(plan: Plan, estimated_cost: float) -> bool:
