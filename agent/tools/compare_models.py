@@ -2,17 +2,22 @@ from __future__ import annotations
 
 from itertools import combinations
 
-from scipy.stats import wilcoxon
+from scipy.stats import ttest_rel, wilcoxon
 
 
 def compare_models(fold_scores: dict[str, list[float]], metric: str) -> dict:
     """
-    Pairwise Wilcoxon signed-rank test on matched CV fold scores.
+    Pairwise comparison of models using both Wilcoxon signed-rank and paired t-test.
+
+    Wilcoxon is non-parametric and robust but cannot reach p<0.05 with n=5 folds
+    (min achievable ≈ 0.0625). The paired t-test assumes normally distributed
+    differences but has more power with few observations. Reporting both lets the
+    user see where they agree and where one has more sensitivity than the other.
 
     Parameters
     ----------
     fold_scores : {method: [score_per_fold]}  — from cross_validate output
-    metric      : label for the result dict
+    metric      : label propagated to the result dict
 
     Returns
     -------
@@ -20,15 +25,20 @@ def compare_models(fold_scores: dict[str, list[float]], metric: str) -> dict:
         "metric": str,
         "comparisons": [
             {
-                "method_a": str, "method_b": str,
-                "mean_a": float, "mean_b": float,
-                "delta": float,          # mean_b - mean_a (positive = b wins)
-                "p_value": float,
-                "significant": bool,     # p < 0.05
-                "winner": str | None,    # None if not significant
+                "method_a": str,
+                "method_b": str,
+                "mean_a": float,
+                "mean_b": float,
+                "delta": float,       # mean_b - mean_a  (positive = b wins)
+                "wilcoxon_p": float,
+                "ttest_p": float,
+                "significant": bool,  # True if either test p < 0.05
+                "tests_agree": bool,  # both tests reach same significance conclusion
+                "winner": str | None, # None if not significant by either test
             }
         ],
-        "overall_winner": str | None,    # method with most significant wins
+        "overall_winner": str | None,
+        "note": str,
     }
     """
     methods = list(fold_scores.keys())
@@ -41,32 +51,39 @@ def compare_models(fold_scores: dict[str, list[float]], metric: str) -> dict:
         mean_b = round(sum(scores_b) / len(scores_b), 4)
         delta = round(mean_b - mean_a, 4)
 
-        p_value = _wilcoxon_p(scores_a, scores_b)
-        significant = p_value < 0.05
+        w_p = _wilcoxon_p(scores_a, scores_b)
+        t_p = _ttest_p(scores_a, scores_b)
+
+        w_sig = w_p < 0.05
+        t_sig = t_p < 0.05
+        significant = w_sig or t_sig
         winner = (b if delta > 0 else a) if significant else None
 
         comparisons.append({
-            "method_a":   a,
-            "method_b":   b,
-            "mean_a":     mean_a,
-            "mean_b":     mean_b,
-            "delta":      delta,
-            "p_value":    round(p_value, 4),
+            "method_a":    a,
+            "method_b":    b,
+            "mean_a":      mean_a,
+            "mean_b":      mean_b,
+            "delta":       delta,
+            "wilcoxon_p":  round(w_p, 4),
+            "ttest_p":     round(t_p, 4),
             "significant": significant,
-            "winner":     winner,
+            "tests_agree": w_sig == t_sig,
+            "winner":      winner,
         })
 
-    overall_winner = _tally_winner(comparisons, methods)
     n_folds = len(next(iter(fold_scores.values()))) if fold_scores else 0
+    overall_winner = _tally_winner(comparisons, methods)
 
     return {
         "metric":         metric,
         "comparisons":    comparisons,
         "overall_winner": overall_winner,
-        # Wilcoxon with n=5 folds cannot reach p<0.05 (min achievable ≈ 0.0625).
-        # Use overall_winner as the directional recommendation; treat p_value as
-        # indicative only. More folds or a paired t-test would give more power.
-        "note": f"limited statistical power: {n_folds} folds (Wilcoxon min p ≈ 0.0625)",
+        "note": (
+            f"n={n_folds} folds: Wilcoxon min p ≈ 0.0625 (non-parametric, robust); "
+            f"paired t-test has more power but assumes normal differences. "
+            f"'significant' = True if either test reaches p<0.05."
+        ),
     }
 
 
@@ -75,12 +92,22 @@ def compare_models(fold_scores: dict[str, list[float]], metric: str) -> dict:
 def _wilcoxon_p(a: list[float], b: list[float]) -> float:
     diffs = [x - y for x, y in zip(a, b)]
     if all(d == 0 for d in diffs):
-        return 1.0   # identical scores — no difference detectable
+        return 1.0
     try:
         _, p = wilcoxon(a, b)
         return float(p)
     except ValueError:
-        # wilcoxon raises if n < 1 or all differences are zero
+        return 1.0
+
+
+def _ttest_p(a: list[float], b: list[float]) -> float:
+    diffs = [x - y for x, y in zip(a, b)]
+    if all(d == 0 for d in diffs):
+        return 1.0
+    try:
+        _, p = ttest_rel(a, b)
+        return float(p)
+    except Exception:
         return 1.0
 
 
