@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -13,36 +10,10 @@ from sklearn.metrics import (
     r2_score,
 )
 from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPClassifier, MLPRegressor
 
 from agent.core.datasets import get as get_profile
 from agent.tools._data_loader import features_and_target
-
-# Sensible defaults merged with any caller-supplied hyperparams.
-_DEFAULTS: dict[str, dict] = {
-    "logreg":         {"C": 1.0, "max_iter": 1000, "class_weight": "balanced"},
-    "random_forest":  {"n_estimators": 100, "random_state": 42, "class_weight": "balanced"},
-    "gbm":            {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1, "random_state": 42},
-    "small_mlp":      {"hidden_layer_sizes": (64, 32), "max_iter": 200, "random_state": 42},
-    # regression variants
-    "ridge":          {"alpha": 1.0},
-    "rf_regressor":   {"n_estimators": 100, "random_state": 42},
-    "gbm_regressor":  {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1, "random_state": 42},
-}
-
-_CLASSIFIERS = {
-    "logreg":        LogisticRegression,
-    "random_forest": RandomForestClassifier,
-    "gbm":           GradientBoostingClassifier,
-    "small_mlp":     MLPClassifier,
-}
-
-_REGRESSORS = {
-    "ridge":         Ridge,
-    "rf_regressor":  RandomForestRegressor,
-    "gbm_regressor": GradientBoostingRegressor,
-    "small_mlp":     MLPRegressor,
-}
+from agent.tools._models import build_model
 
 
 def train_model(dataset: str, method: str, hyperparams: dict | None = None) -> dict:
@@ -57,9 +28,7 @@ def train_model(dataset: str, method: str, hyperparams: dict | None = None) -> d
     """
     profile = get_profile(dataset)
     X, y = features_and_target(dataset)
-
-    hp = {**_DEFAULTS.get(method, {}), **(hyperparams or {})}
-    model = _build(method, profile.task_type, hp)
+    model, hp = build_model(method, profile.task_type, hyperparams)
 
     if profile.task_type == "classification":
         X_train, X_test, y_train, y_test = train_test_split(
@@ -86,14 +55,6 @@ def train_model(dataset: str, method: str, hyperparams: dict | None = None) -> d
 
 
 # --- helpers -----------------------------------------------------------------
-
-def _build(method: str, task_type: str, hp: dict):
-    builders = _CLASSIFIERS if task_type == "classification" else _REGRESSORS
-    if method not in builders:
-        available = list(_CLASSIFIERS) + list(_REGRESSORS)
-        raise ValueError(f"unknown method '{method}'; supported: {available}")
-    return builders[method](**hp)
-
 
 def _clf_scores(model, X_test, y_test) -> dict:
     y_pred = model.predict(X_test)
