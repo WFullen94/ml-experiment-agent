@@ -10,7 +10,8 @@ from .types import GateOutcome, GateResult, Plan, StepType, Trajectory, Trajecto
 MAX_REVISIONS = 3
 
 # Methods that run in seconds on CPU — anything else is "expensive" and gets scaffolded.
-CLASSIC_METHODS = {"logreg", "random_forest", "gbm", "small_mlp"}
+CLASSIC_METHODS = {"logreg", "random_forest", "gbm", "small_mlp",
+                   "ridge", "rf_regressor", "gbm_regressor"}
 COMPUTE_BUDGET_GPU_MIN = 1.0
 
 
