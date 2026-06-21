@@ -2,6 +2,11 @@
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Ship only the agent package; eval/ is a dev-time test harness imported from
+# the repo root (keeps flat-layout discovery from tripping over it).
+[tool.setuptools.packages.find]
+include = ["agent*"]
+
 [project]
 name = "ml-experiment-agent"
 version = "0.1.0"
