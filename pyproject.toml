@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov"]
+# Evaluation harness — used by the eval/ package to score the real agent.
+eval = ["agent-eval @ git+https://github.com/WFullen94/agent-eval"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
